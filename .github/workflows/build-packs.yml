@@ -85,8 +85,9 @@ jobs:
         with:
           name: pack-${{ matrix.lang }}
           path: |
-            build/*.sqlite.zst
+            build/*.sqlite.xz
             build/*.meta.json
+          if-no-files-found: error
           retention-days: 14
 
   manifest:
@@ -123,6 +124,9 @@ jobs:
       - name: Setup Pages
         if: ${{ inputs.publish_pages }}
         uses: actions/configure-pages@v5
+        with:
+          # Create the Pages site on first publish instead of 404ing.
+          enablement: true
       - name: Upload Pages artifact
         if: ${{ inputs.publish_pages }}
         uses: actions/upload-pages-artifact@v3
