@@ -11,8 +11,22 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 
 MANIFEST_VERSION = 1
+
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _version_key(pack_version: str) -> tuple[int, str]:
+    """Sort key that ranks a real ISO-date pack_version above a non-date one.
+
+    A locally-built pack with an unknown date (pack_version="unknown") must not
+    lexicographically shadow a real dated pack ("unknown" > "2026-…"), so dated
+    versions get a higher tier and sort chronologically within it.
+    """
+    v = pack_version or ""
+    return (1, v) if _ISO_DATE.fullmatch(v) else (0, v)
 
 
 def _pack_entry(meta: dict, base_url: str) -> dict:
@@ -56,7 +70,7 @@ def build_manifest(
 
     packs = []
     for lang_code in sorted(packs_by_lang):
-        metas = sorted(packs_by_lang[lang_code], key=lambda m: m["pack_version"])
+        metas = sorted(packs_by_lang[lang_code], key=lambda m: _version_key(m["pack_version"]))
         latest = metas[-1]
         deltas = [
             {

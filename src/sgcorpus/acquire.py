@@ -80,26 +80,42 @@ def download(
     if total is not None and existing >= total:
         existing = 0  # stale/oversized partial — restart
 
-    mode = "ab" if existing else "wb"
     req = urllib.request.Request(url)
     if existing:
         req.add_header("Range", f"bytes={existing}-")
 
-    with urllib.request.urlopen(req, timeout=120) as resp, open(dest, mode) as out:
-        got = existing
-        while True:
-            chunk = resp.read(_CHUNK)
-            if not chunk:
-                break
-            out.write(chunk)
-            got += len(chunk)
-            if progress and total:
-                pct = 100.0 * got / total
-                print(f"\r  downloading {pct:5.1f}%  ({got:,}/{total:,} B)", end="")
+    resp = urllib.request.urlopen(req, timeout=120)
+    try:
+        # If we asked to resume but the server ignored Range and sent the whole
+        # body (status 200, not 206), appending would corrupt the file — restart
+        # from byte 0 instead. Same if the resource shrank/changed underneath us.
+        if existing and resp.status != 206:
+            existing = 0
+        mode = "ab" if existing else "wb"
+        with open(dest, mode) as out:
+            got = existing
+            while True:
+                chunk = resp.read(_CHUNK)
+                if not chunk:
+                    break
+                out.write(chunk)
+                got += len(chunk)
+                if progress and total:
+                    pct = 100.0 * got / total
+                    print(f"\r  downloading {pct:5.1f}%  ({got:,}/{total:,} B)", end="")
+    finally:
+        resp.close()
     if progress:
         print()
 
     size = os.path.getsize(dest)
+    # Guard against a silently truncated transfer: a short file must not be
+    # cached as ".done". The partial is kept on disk so a rerun can resume it.
+    if total is not None and size != total:
+        raise RuntimeError(
+            f"download size mismatch for {url}: got {size:,} B, expected {total:,} B "
+            f"(partial kept for resume; rerun to continue)"
+        )
     sha = _sha256_file(dest)
     prov = Provenance(
         url=url,

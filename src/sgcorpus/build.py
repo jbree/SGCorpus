@@ -14,7 +14,7 @@ import io
 import json
 import os
 import sqlite3
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 
 from . import SCHEMA_VERSION
 from .config import BuildConfig, SourceSpec
@@ -32,6 +32,7 @@ class BuildStats:
     lines_read: int = 0
     lines_malformed: int = 0
     entries_skipped_lang: int = 0
+    entries_skipped_nolang: int = 0
     entries_skipped_empty: int = 0
     words: int = 0
     senses: int = 0
@@ -60,91 +61,148 @@ def open_text(path: str) -> io.TextIOBase:
     return open(path, "r", encoding="utf-8")
 
 
-def _parse_and_normalize(
-    path: str, cfg: BuildConfig, target_lang: str, stats: BuildStats
-) -> list[NormWord]:
-    words: list[NormWord] = []
+_STAGE_BATCH = 5000
+
+
+def _serialize_children(nw: NormWord) -> str:
+    """Pack a NormWord's senses/pronunciations/relations into one JSON payload
+    for the staging table (the sort-key columns are stored separately)."""
+    return json.dumps(
+        {
+            "s": [[s.ordinal, s.gloss, s.example, s.example_en, s.tags] for s in nw.senses],
+            "p": [[p.ipa, p.dialects, p.rhyme_key] for p in nw.pronunciations],
+            "r": [[r.rel_type, r.target, r.target_folded, r.sense_hint, r.tags]
+                  for r in nw.relations],
+        },
+        ensure_ascii=False,
+    )
+
+
+def _stage_entries(
+    path: str, cfg: BuildConfig, target_lang: str, stats: BuildStats,
+    stage: sqlite3.Connection,
+) -> None:
+    """Stream the source line-by-line into a disk-backed staging table.
+
+    Memory stays bounded (one batch of rows) regardless of source size — the
+    full English dump never lives in RAM. Language filtering is done here, the
+    single authority: an entry is kept only when its ``lang_code`` is present and
+    equals ``target_lang`` (a missing ``lang_code`` is an unknown language and is
+    dropped, never blindly emitted — plan §3.1). ``seq`` records file order so the
+    later ORDER BY has a deterministic tie-breaker.
+    """
+    stage.execute(
+        "CREATE TABLE stage (seq INTEGER PRIMARY KEY, word_search TEXT, "
+        "word_folded TEXT, word TEXT, pos TEXT, payload TEXT)"
+    )
+    batch: list[tuple] = []
+    seq = 0
+
+    def flush() -> None:
+        if batch:
+            stage.executemany(
+                "INSERT INTO stage(seq, word_search, word_folded, word, pos, payload) "
+                "VALUES (?,?,?,?,?,?)",
+                batch,
+            )
+            batch.clear()
+
     with open_text(path) as f:
         for obj, err in iter_entries(f):
             stats.lines_read += 1
             if err:
                 stats.lines_malformed += 1
                 continue
-            lc = obj.get("lang_code")
-            if target_lang and lc and lc != target_lang:
-                stats.entries_skipped_lang += 1
-                continue
-            nw = normalize_entry(obj, cfg, target_lang)
+            if target_lang:
+                lc = obj.get("lang_code")
+                if not lc:
+                    stats.entries_skipped_nolang += 1
+                    continue
+                if lc != target_lang:
+                    stats.entries_skipped_lang += 1
+                    continue
+            nw = normalize_entry(obj, cfg)
             if nw is None:
                 stats.entries_skipped_empty += 1
                 continue
-            words.append(nw)
-    return words
+            seq += 1
+            batch.append(
+                (seq, nw.word_search, nw.word_folded, nw.word, nw.pos, _serialize_children(nw))
+            )
+            if len(batch) >= _STAGE_BATCH:
+                flush()
+    flush()
 
 
-def _assign_etym_index(words: list[NormWord]) -> None:
-    """Number entries sharing (word_folded, pos) so the natural key is unique.
+def _load_staged(
+    conn: sqlite3.Connection, stage: sqlite3.Connection, stats: BuildStats
+) -> None:
+    """Stream staged rows in deterministic order into the final schema.
 
-    Sorted order in => deterministic etym_index (plan §7 diffing key).
+    The staging ORDER BY is disk-backed (SQLite external sort), so this pass is
+    also memory-bounded. Entries sharing ``(word_folded, pos)`` are contiguous in
+    this order (identical word_folded implies identical word_search), so
+    ``etym_index`` is assigned in one pass by tracking the previous key.
     """
-    counter: dict[tuple[str, str], int] = {}
-    for nw in words:
-        key = (nw.word_folded, nw.pos)
-        nw.etym_index = counter.get(key, 0)  # type: ignore[attr-defined]
-        counter[key] = nw.etym_index + 1  # type: ignore[attr-defined]
-
-
-def _load(conn: sqlite3.Connection, words: list[NormWord], stats: BuildStats) -> None:
-    """Insert rows in deterministic order."""
     schema.create_schema(conn)
     word_id = sense_id = pron_id = rel_id = 0
+    prev_key: tuple[str, str] | None = None
+    etym = 0
 
-    for nw in words:
+    cur = stage.execute(
+        "SELECT word_search, word_folded, word, pos, payload FROM stage "
+        "ORDER BY word_search, word_folded, word, pos, seq"
+    )
+    for word_search, word_folded, word, pos, payload in cur:
+        key = (word_folded, pos)
+        etym = etym + 1 if key == prev_key else 0
+        prev_key = key
+
         word_id += 1
-        etym = getattr(nw, "etym_index", 0)
         conn.execute(
             "INSERT INTO word(id, word, word_folded, word_search, pos, etym_index) "
             "VALUES (?,?,?,?,?,?)",
-            (word_id, nw.word, nw.word_folded, nw.word_search, nw.pos, etym),
+            (word_id, word, word_folded, word_search, pos, etym),
         )
         stats.words += 1
+        children = json.loads(payload)
 
-        for s in nw.senses:
+        for ordv, gloss, ex, exen, tag_list in children["s"]:
             sense_id += 1
-            tags = json.dumps(s.tags, ensure_ascii=False) if s.tags else None
+            tags = json.dumps(tag_list, ensure_ascii=False) if tag_list else None
             conn.execute(
                 "INSERT INTO sense(id, word_id, ordinal, gloss, example, example_en, tags) "
                 "VALUES (?,?,?,?,?,?,?)",
-                (sense_id, word_id, s.ordinal, s.gloss, s.example, s.example_en, tags),
+                (sense_id, word_id, ordv, gloss, ex, exen, tags),
             )
             stats.senses += 1
 
         has_ipa = False
-        for p in nw.pronunciations:
+        for ipa, dialect_list, rk in children["p"]:
             pron_id += 1
-            dialects = json.dumps(p.dialects, ensure_ascii=False) if p.dialects else None
+            dialects = json.dumps(dialect_list, ensure_ascii=False) if dialect_list else None
             conn.execute(
                 "INSERT INTO pronunciation(id, word_id, ipa, dialects, rhyme_key) "
                 "VALUES (?,?,?,?,?)",
-                (pron_id, word_id, p.ipa, dialects, p.rhyme_key),
+                (pron_id, word_id, ipa, dialects, rk),
             )
             stats.pronunciations += 1
-            if p.ipa:
+            if ipa:
                 has_ipa = True
         if has_ipa:
             stats.words_with_ipa += 1
 
         has_syn = False
-        for r in nw.relations:
+        for rel_type, target, target_folded, sense_hint, tag_list in children["r"]:
             rel_id += 1
-            tags = json.dumps(r.tags, ensure_ascii=False) if r.tags else None
+            tags = json.dumps(tag_list, ensure_ascii=False) if tag_list else None
             conn.execute(
                 "INSERT INTO relation(id, word_id, rel_type, target, target_folded, sense_hint, tags) "
                 "VALUES (?,?,?,?,?,?,?)",
-                (rel_id, word_id, r.rel_type, r.target, r.target_folded, r.sense_hint, tags),
+                (rel_id, word_id, rel_type, target, target_folded, sense_hint, tags),
             )
             stats.relations += 1
-            if r.rel_type == "synonym":
+            if rel_type == "synonym":
                 has_syn = True
         if has_syn:
             stats.words_with_synonym += 1
@@ -163,7 +221,8 @@ def compute_content_digest(conn: sqlite3.Connection) -> str:
     ):
         parts = [f"W|{wf}|{pos}|{etym}|{word}"]
         for ordv, gloss, ex, exen, tags in conn.execute(
-            "SELECT ordinal, gloss, example, example_en, tags FROM sense WHERE word_id=?",
+            "SELECT ordinal, gloss, example, example_en, tags FROM sense "
+            "WHERE word_id=? ORDER BY ordinal",
             (wid,),
         ):
             parts.append(f"S|{ordv}|{gloss}|{ex or ''}|{exen or ''}|{tags or ''}")
@@ -220,47 +279,60 @@ def build_pack(
     pack_version = dump_date
 
     stats = BuildStats()
-    words = _parse_and_normalize(input_path, cfg, source.lang_code, stats)
-    words.sort(key=lambda w: (*w.sort_key(),))
-    _assign_etym_index(words)
 
     base = f"{source.lang_code}-{pack_version}-schema{SCHEMA_VERSION}"
     sqlite_path = os.path.join(out_dir, base + ".sqlite")
-    if os.path.exists(sqlite_path):
-        os.remove(sqlite_path)
+    stage_path = sqlite_path + ".stage"
+    for p in (sqlite_path, stage_path):
+        if os.path.exists(p):
+            os.remove(p)
 
-    conn = schema.open_build_db(sqlite_path, cfg.page_size)
+    # Stage the whole (filtered, normalized) corpus to disk, then stream it in
+    # sorted order into the final schema. Both passes are memory-bounded, so the
+    # multi-GB English dump never lives in RAM (plan §4.2/§4.3).
+    stage = sqlite3.connect(stage_path)
     try:
-        conn.execute("BEGIN")
-        _load(conn, words, stats)
-        conn.execute("COMMIT")
-        schema.create_indexes(conn)
-        content_digest = compute_content_digest(conn)
-        # built_at is derived from the dump date, NOT wall-clock, so two builds
-        # of the same source dump are byte-identical (plan §7 determinism).
-        meta = {
-            "schema_version": SCHEMA_VERSION,
-            "word_lang": source.word_lang,
-            "definition_lang": source.definition_lang,
-            "source_edition": source.edition,
-            "source_dump_date": dump_date,
-            "pack_version": pack_version,
-            "wiktextract_version": wiktextract_version,
-            "license": LICENSE,
-            "attribution": ATTRIBUTION,
-            "built_at": dump_date,
-            "content_digest": content_digest,
-        }
-        schema.write_meta(conn, meta)
-        conn.commit()
-        conn.execute("PRAGMA optimize;")
-        conn.execute("VACUUM;")
-        conn.commit()
-        integrity = conn.execute("PRAGMA integrity_check;").fetchone()[0]
-        if integrity != "ok":
-            raise RuntimeError(f"integrity_check failed: {integrity}")
+        stage.execute("PRAGMA journal_mode = OFF;")  # throwaway; rebuilt each run
+        stage.execute("BEGIN")
+        _stage_entries(input_path, cfg, source.lang_code, stats, stage)
+        stage.execute("COMMIT")
+
+        conn = schema.open_build_db(sqlite_path, cfg.page_size)
+        try:
+            conn.execute("BEGIN")
+            _load_staged(conn, stage, stats)
+            conn.execute("COMMIT")
+            schema.create_indexes(conn)
+            content_digest = compute_content_digest(conn)
+            # built_at is derived from the dump date, NOT wall-clock, so two
+            # builds of the same source dump are byte-identical (plan §7).
+            meta = {
+                "schema_version": SCHEMA_VERSION,
+                "word_lang": source.word_lang,
+                "definition_lang": source.definition_lang,
+                "source_edition": source.edition,
+                "source_dump_date": dump_date,
+                "pack_version": pack_version,
+                "wiktextract_version": wiktextract_version,
+                "license": LICENSE,
+                "attribution": ATTRIBUTION,
+                "built_at": dump_date,
+                "content_digest": content_digest,
+            }
+            schema.write_meta(conn, meta)
+            conn.commit()
+            conn.execute("PRAGMA optimize;")
+            conn.execute("VACUUM;")
+            conn.commit()
+            integrity = conn.execute("PRAGMA integrity_check;").fetchone()[0]
+            if integrity != "ok":
+                raise RuntimeError(f"integrity_check failed: {integrity}")
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        stage.close()
+        if os.path.exists(stage_path):
+            os.remove(stage_path)
 
     sha = _sha256_file(sqlite_path)
     uncompressed_size = os.path.getsize(sqlite_path)
@@ -302,6 +374,7 @@ def build_pack(
             "lines_read": stats.lines_read,
             "lines_malformed": stats.lines_malformed,
             "entries_skipped_lang": stats.entries_skipped_lang,
+            "entries_skipped_nolang": stats.entries_skipped_nolang,
             "entries_skipped_empty": stats.entries_skipped_empty,
         },
         "artifact": os.path.basename(compressed_path or sqlite_path),

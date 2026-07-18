@@ -78,10 +78,6 @@ class NormWord:
     pronunciations: list[NormPron] = field(default_factory=list)
     relations: list[NormRelation] = field(default_factory=list)
 
-    def sort_key(self) -> tuple:
-        # Deterministic ordering for insert + etym_index assignment (plan §5/§7).
-        return (self.word_search, self.word_folded, self.word, self.pos)
-
 
 def normalize_pos(pos: str | None) -> str:
     p = clean(pos or "").lower()
@@ -208,19 +204,16 @@ def _normalize_relations(entry: dict, cfg: BuildConfig) -> list[NormRelation]:
     return out
 
 
-def normalize_entry(
-    entry: dict, cfg: BuildConfig, target_lang: str | None
-) -> NormWord | None:
+def normalize_entry(entry: dict, cfg: BuildConfig) -> NormWord | None:
     """Normalize one entry to a :class:`NormWord`, or None if it should be dropped.
 
-    Dropped when: not the target language, no surface word, or zero senses after
-    filtering (the graceful-degradation contract, plan §8.5, guarantees every
-    stored headword has word + ≥1 gloss).
+    Language filtering is **not** done here — it is the caller's single
+    responsibility (see :func:`sgcorpus.build._stage_entries`), so this function
+    has one job: extract and clean. Dropped when there is no surface word or zero
+    senses after filtering (the graceful-degradation contract, plan §8.5,
+    guarantees every stored headword has word + ≥1 gloss).
     """
     if not isinstance(entry, dict):
-        return None
-    lang_code = entry.get("lang_code")
-    if target_lang and lang_code and lang_code != target_lang:
         return None
 
     word = clean(entry.get("word"))

@@ -82,7 +82,8 @@ def cmd_build(args) -> int:
     s = result.stats
     print(f"  words={s.words:,}  senses={s.senses:,}  pron={s.pronunciations:,}  rel={s.relations:,}")
     print(f"  ipa_coverage={s.ipa_coverage:.1%}  synonym_coverage={s.synonym_coverage:.1%}  avg_senses={s.avg_senses}")
-    print(f"  malformed_lines={s.lines_malformed}  skipped_lang={s.entries_skipped_lang}  skipped_empty={s.entries_skipped_empty}")
+    print(f"  malformed_lines={s.lines_malformed}  skipped_lang={s.entries_skipped_lang}  "
+          f"skipped_nolang={s.entries_skipped_nolang}  skipped_empty={s.entries_skipped_empty}")
     print(f"  -> {result.sqlite_path}")
     if result.compressed_path:
         ratio = result.meta["compressed_size"] / max(result.meta["uncompressed_size"], 1)

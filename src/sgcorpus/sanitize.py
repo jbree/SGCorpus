@@ -17,8 +17,10 @@ _WIKILINK = re.compile(r"\[\[(?:[^\[\]|]*\|)?([^\[\]|]+)\]\]")
 _TEMPLATE = re.compile(r"\{\{[^{}]*\}\}")
 # '''bold''' / ''italic'' wiki emphasis markers.
 _EMPHASIS = re.compile(r"'{2,5}")
-# Any HTML/XML tag.
-_HTML_TAG = re.compile(r"<[^>]+>")
+# Any HTML/XML tag: '<' immediately followed by an optional '/' and a letter.
+# This deliberately does NOT match a lone '<'/'>' used as comparison operators
+# in ordinary text (e.g. "x < y"), so cleanup and the QA scan don't fire on it.
+_HTML_TAG = re.compile(r"</?[A-Za-z][^>]*>")
 _WHITESPACE = re.compile(r"\s+")
 
 
@@ -45,8 +47,12 @@ def clean(text: str | None) -> str:
 
 
 def has_residual_markup(text: str) -> bool:
-    """QA helper (plan §9): true if shipped text still carries markup."""
-    return "[[" in text or "{{" in text or "<" in text and ">" in text
+    """QA helper (plan §9): true if shipped text still carries markup.
+
+    Detects wikilinks, templates, and actual HTML tags — not bare ``<``/``>``
+    comparison operators, which are legitimate dictionary text.
+    """
+    return "[[" in text or "{{" in text or bool(_HTML_TAG.search(text))
 
 
 def fold(text: str) -> str:

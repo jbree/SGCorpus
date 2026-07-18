@@ -12,6 +12,7 @@ __pycache__/
 *.jsonl
 *.jsonl.gz
 *.sqlite
+*.sqlite.stage
 *.sqlite.xz
 *.patch
 *.patch.xz

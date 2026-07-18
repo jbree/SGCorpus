@@ -41,14 +41,26 @@ def test_folding():
     assert search_fold("Über") == "uber"
 
 
+def test_has_residual_markup():
+    from sgcorpus.sanitize import has_residual_markup
+    assert has_residual_markup("a [[link]] here")
+    assert has_residual_markup("a {{template}} here")
+    assert has_residual_markup("bold <b>x</b> text")
+    # Bare comparison operators are legitimate text, NOT markup.
+    assert not has_residual_markup("true when x < y and y > z")
+    assert not has_residual_markup("a plain clean gloss")
+
+
 # --- build -----------------------------------------------------------------
 
 def test_build_filters_language_and_drops_empty(tmp_path, en_source):
     result = _build(tmp_path, en_source)
     conn = sqlite3.connect(result.sqlite_path)
     words = {w for (w,) in conn.execute("SELECT word FROM word")}
-    # French headword filtered; blank/empty-gloss words dropped.
+    # French headword filtered; missing-lang_code entry dropped; blank/empty
+    # words dropped.
     assert "océan" not in words
+    assert "kartoffel" not in words          # no lang_code -> unknown language -> dropped
     assert "  " not in words
     assert "empty" not in words
     assert {"ocean", "run", "café"} <= words
@@ -142,7 +154,8 @@ def test_no_residual_markup_in_shipped_text(tmp_path, en_source):
 def test_stats_and_meta(tmp_path, en_source):
     result = _build(tmp_path, en_source)
     assert result.stats.lines_malformed == 1
-    assert result.stats.entries_skipped_lang == 1  # the French entry
+    assert result.stats.entries_skipped_lang == 1     # the French entry (lang_code=fr)
+    assert result.stats.entries_skipped_nolang == 1   # the German entry (no lang_code)
     assert result.stats.words >= 3
     assert result.meta["schema_version"] == SCHEMA_VERSION
     assert result.meta["content_digest"]

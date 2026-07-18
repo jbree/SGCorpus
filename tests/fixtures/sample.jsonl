@@ -3,6 +3,7 @@
 {"word": "run", "pos": "noun", "lang": "English", "lang_code": "en", "senses": [{"glosses": ["An act of running."]}], "synonyms": [{"word": "jog"}]}
 {"word": "café", "pos": "noun", "lang": "English", "lang_code": "en", "senses": [{"glosses": ["A [[coffee]] shop with '''markup'''."], "examples": [{"text": "We met at a {{small}} café."}]}], "sounds": [{"audio": "cafe.ogg"}]}
 {"word": "océan", "pos": "noun", "lang": "French", "lang_code": "fr", "senses": [{"glosses": ["Ocean (French headword — must be filtered out of the en pack)."]}]}
+{"word": "kartoffel", "pos": "noun", "lang": "German", "senses": [{"glosses": ["Potato (entry with NO lang_code — unknown language, must be dropped)."]}]}
 {"word": "  ", "pos": "noun", "lang": "English", "lang_code": "en", "senses": [{"glosses": ["blank word, should be dropped"]}]}
 {"word": "empty", "pos": "adjective", "lang": "English", "lang_code": "en", "senses": [{"glosses": ["   "]}]}
 this line is not valid json and must be counted as malformed
