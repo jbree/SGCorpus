@@ -1,0 +1,138 @@
+name: Build packs
+
+# Builds one SQLite pack per language from the current kaikki.org extract,
+# QAs it, aggregates a catalog manifest, and uploads the results as workflow
+# artifacts. Publishing to a CDN is a separate, deliberate step (plan §7): a
+# pack is cut on demand, not on kaikki's re-extract cadence — so this is
+# workflow_dispatch only, no schedule.
+
+on:
+  workflow_dispatch:
+    inputs:
+      langs:
+        description: "Space-separated lang_codes to build"
+        default: "en"
+      edition:
+        description: "Wiktionary edition"
+        default: "enwiktionary"
+      dump_date:
+        description: "Source dump date YYYY-MM-DD (blank = derive from HTTP Last-Modified)"
+        default: ""
+      publish_pages:
+        description: "Publish manifest + packs to GitHub Pages"
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-packs
+  cancel-in-progress: false
+
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      langs: ${{ steps.split.outputs.langs }}
+    steps:
+      - name: Split langs input into a JSON matrix
+        id: split
+        run: |
+          arr=$(printf '%s\n' ${{ inputs.langs }} | jq -R . | jq -sc .)
+          echo "langs=$arr" >> "$GITHUB_OUTPUT"
+          echo "matrix: $arr"
+
+  build:
+    needs: prep
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # One language per job keeps the multi-GB source dump within the
+        # runner's disk budget.
+        lang: ${{ fromJSON(needs.prep.outputs.langs) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
+          df -h /
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync
+        run: uv sync
+
+      - name: Build pack
+        run: |
+          uv run sgcorpus build \
+            --edition "${{ inputs.edition }}" \
+            --lang "${{ matrix.lang }}" \
+            ${{ inputs.dump_date && format('--dump-date {0}', inputs.dump_date) || '' }}
+
+      - name: Verify pack
+        run: |
+          PACK=$(ls build/${{ matrix.lang }}-*-schema*.sqlite | head -1)
+          uv run sgcorpus verify "$PACK" --spot-check ocean run love
+
+      - name: Prune raw download (keep only artifacts)
+        run: rm -rf downloads
+
+      - name: Upload pack artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pack-${{ matrix.lang }}
+          path: |
+            build/*.sqlite.zst
+            build/*.meta.json
+          retention-days: 14
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Sync
+        run: uv sync
+      - name: Collect pack artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pack-*
+          path: build
+          merge-multiple: true
+      - name: Generate manifest
+        run: |
+          uv run sgcorpus manifest \
+            --base-url "${{ vars.PACK_BASE_URL || 'https://cdn.example/packs' }}" \
+            --generated-at "$(date -u +%Y-%m-%d)"
+          cat build/catalog.json
+      - name: Upload catalog
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalog
+          path: build/catalog.json
+          retention-days: 14
+
+      # Optional GitHub Pages publish. Enable Pages in repo settings and flip
+      # the publish_pages input. For a production CDN, swap this for an
+      # rsync/S3 upload step.
+      - name: Setup Pages
+        if: ${{ inputs.publish_pages }}
+        uses: actions/configure-pages@v5
+      - name: Upload Pages artifact
+        if: ${{ inputs.publish_pages }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build
+      - name: Deploy to Pages
+        if: ${{ inputs.publish_pages }}
+        uses: actions/deploy-pages@v4
+
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

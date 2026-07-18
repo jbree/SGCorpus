@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Pipeline artifacts (large; never committed — published to the CDN)
+/downloads/
+/build/
+/dist/
+*.jsonl
+*.jsonl.gz
+*.sqlite
+*.sqlite.zst
+*.patch.zst
+!tests/**/*.jsonl
+
+# macOS
+.DS_Store
