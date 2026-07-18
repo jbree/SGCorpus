@@ -202,7 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
     bp.add_argument("--wiktextract-version", default="unknown")
     bp.add_argument("--no-resume", action="store_true")
     bp.add_argument("--offline", action="store_true", help="rebuild from the cached download only; never touch the network")
-    bp.add_argument("--no-compress", action="store_true", help="skip .zst emission")
+    bp.add_argument("--no-compress", action="store_true", help="skip .xz emission")
     bp.add_argument("--no-examples", action="store_true", help="drop examples (size lever)")
     bp.add_argument("--keep-etymology", action="store_true")
     bp.add_argument("--keep-form-of", action="store_true", help="retain inflection senses")

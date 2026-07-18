@@ -6,9 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Song Garden" }]
-dependencies = [
-    "zstandard>=0.22",
-]
+# No runtime dependencies — the pipeline is pure Python stdlib (json, sqlite3,
+# lzma, urllib). LZMA/.xz packs decode natively on Apple platforms.
+dependencies = []
 
 [project.scripts]
 sgcorpus = "sgcorpus.cli:main"

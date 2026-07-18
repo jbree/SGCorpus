@@ -269,8 +269,8 @@ def build_pack(
     compressed_sha = ""
     compressed_size = 0
     if compress:
-        compressed_path = sqlite_path + ".zst"
-        _compress_zst(sqlite_path, compressed_path)
+        compressed_path = sqlite_path + ".xz"
+        _compress_xz(sqlite_path, compressed_path)
         compressed_sha = _sha256_file(compressed_path)
         compressed_size = os.path.getsize(compressed_path)
 
@@ -321,12 +321,19 @@ def build_pack(
     )
 
 
-def _compress_zst(src: str, dst: str) -> None:
-    import zstandard
+def _compress_xz(src: str, dst: str) -> None:
+    """Compress to .xz (LZMA). Apple's Compression framework / AppleArchive
+    decode LZMA natively, so the app needs no third-party codec. LZMA also beats
+    zstd on ratio for this text-heavy data, and lzma is Python stdlib (no dep).
+    Deterministic: same input bytes -> same .xz bytes (no timestamps/filenames).
+    """
+    import lzma
 
-    cctx = zstandard.ZstdCompressor(level=19)
-    with open(src, "rb") as fin, open(dst, "wb") as fout:
-        cctx.copy_stream(fin, fout, read_size=_CHUNK, write_size=_CHUNK)
+    with open(src, "rb") as fin, lzma.open(
+        dst, "wb", format=lzma.FORMAT_XZ, preset=9 | lzma.PRESET_EXTREME
+    ) as fout:
+        for chunk in iter(lambda: fin.read(_CHUNK), b""):
+            fout.write(chunk)
 
 
 _CHUNK = 1 << 20

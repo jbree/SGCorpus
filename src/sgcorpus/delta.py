@@ -15,7 +15,7 @@ import os
 import sqlite3
 
 from . import SCHEMA_VERSION
-from .build import compute_content_digest, _compress_zst, _sha256_file
+from .build import compute_content_digest, _compress_xz, _sha256_file
 from . import schema
 
 _NATURAL_KEY_SQL = "SELECT id, word_folded, pos, etym_index FROM word"
@@ -105,8 +105,8 @@ def create_delta(
     compressed_size = 0
     sha = _sha256_file(patch_path)
     if compress:
-        cpath = patch_path + ".zst"
-        _compress_zst(patch_path, cpath)
+        cpath = patch_path + ".xz"
+        _compress_xz(patch_path, cpath)
         sha = _sha256_file(cpath)
         compressed_size = os.path.getsize(cpath)
         artifact = os.path.basename(cpath)

@@ -81,7 +81,7 @@ fails with a clear message.
 
 ## Output
 
-Per language: `<lang>-<dumpdate>-schema<N>.sqlite(.zst)` plus a `.meta.json`
+Per language: `<lang>-<dumpdate>-schema<N>.sqlite(.xz)` plus a `.meta.json`
 sidecar with row counts, coverage metrics, and sha256s. `sgcorpus manifest`
 aggregates the sidecars into `catalog.json`.
 

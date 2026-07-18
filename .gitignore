@@ -12,8 +12,9 @@ __pycache__/
 *.jsonl
 *.jsonl.gz
 *.sqlite
-*.sqlite.zst
-*.patch.zst
+*.sqlite.xz
+*.patch
+*.patch.xz
 !tests/**/*.jsonl
 
 # macOS

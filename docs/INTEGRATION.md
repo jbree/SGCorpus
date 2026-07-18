@@ -15,7 +15,8 @@ and read-only rules, which are load-bearing given the app's iCloud sensitivity.
 ## 1. What the artifact is
 
 - A single **read-only SQLite file per language**: `<lang>-<dumpdate>-schema<N>.sqlite`
-  (e.g. `en-2026-07-16-schema1.sqlite`), optionally shipped compressed as `.zst`.
+  (e.g. `en-2026-07-16-schema1.sqlite`), optionally shipped compressed as `.xz`
+  (LZMA — decoded natively on Apple platforms, no third-party codec needed).
 - **Portable across architecture and endianness** — one file serves Intel mac,
   Apple-silicon mac, and iOS. No per-arch builds, no encryption, no custom
   extensions.
@@ -28,7 +29,7 @@ and read-only rules, which are load-bearing given the app's iCloud sensitivity.
 Produce one locally with:
 
 ```bash
-uv run sgcorpus build --lang en          # -> build/en-<dumpdate>-schema1.sqlite(.zst)
+uv run sgcorpus build --lang en          # -> build/en-<dumpdate>-schema1.sqlite(.xz)
 uv run sgcorpus verify build/en-*.sqlite --spot-check ocean run love
 ```
 
@@ -276,33 +277,49 @@ emitted, so `word` + at least one `sense.gloss` is the only safe invariant.
 Two supported paths; both use the identical schema, so app code treats them the same.
 
 ### Bundled (recommended for first-run English, zero setup)
-Ship one `.sqlite` in the app bundle. Post-`VACUUM` the file is already compact,
-so **bundle it uncompressed** and open it directly (copy it out to Application
-Support on first launch if you want a uniform read/relocate path, or open the
-bundle copy read-only in place). Build it with `--no-compress` to skip `.zst`.
+Ship the **uncompressed** `.sqlite` in the app bundle and open it read-only in
+place (or copy it out to Application Support on first launch if you want a uniform
+read/relocate path). Don't compress the bundled pack: the App Store already
+compresses the app for delivery, and you need the file uncompressed at runtime
+anyway — compressing it in-bundle just adds a first-launch decompress step for no
+download savings. Build it with `--no-compress`. If the uncompressed size is too
+big to bundle, trim *content* (`--no-examples`, or `--relations synonym antonym`),
+not compression.
 
 ### Downloaded on demand (other languages)
 1. Fetch the catalog manifest (`catalog.json`, produced by `sgcorpus manifest`) —
    see its shape in `docs/PLAN.md` §6. It lists, per `lang_code`, the `latest`
    pack URL, `sha256`, sizes, and coverage stats.
 2. Download `latest.url`, **verify `sha256`** before use.
-3. Decompress if `.zst` (see the compression note below).
+3. Decompress the `.xz` (LZMA) — natively, no dependency:
+
+```swift
+import Compression  // or AppleArchive
+
+// Streaming LZMA decode of a downloaded .xz into the destination .sqlite.
+func decompressXZ(at src: URL, to dst: URL) throws {
+    let input = try FileHandle(forReadingFrom: src)
+    FileManager.default.createFile(atPath: dst.path, contents: nil)
+    let output = try FileHandle(forWritingTo: dst)
+    defer { try? input.close(); try? output.close() }
+
+    let filter = try InputFilter(.decompress, using: .lzma) { _ in
+        input.readData(ofLength: 1 << 16)
+    }
+    while let chunk = try filter.readData(ofLength: 1 << 16) {
+        output.write(chunk)
+    }
+}
+```
+
 4. Move into `ReferencePacks/`, set `isExcludedFromBackup = true`, open read-only.
 5. Run `PRAGMA integrity_check` once after install; optionally recompute and
    compare `meta.content_digest`.
 
-**Compression note (decision point):** packs compress with **Zstandard** (`.zst`)
-for the best transfer size, but Apple's `Compression`/`AppleArchive` frameworks
-do **not** decode zstd natively. Pick one:
-- Add a small zstd decode dependency (wrap the reference `libzstd` C library via
-  SPM) — keeps the smallest downloads; **or**
-- Serve/bundle the **uncompressed `.sqlite`** (build with `--no-compress`) and
-  rely on HTTPS transfer compression — zero app dependency, larger transfer.
-
-For the initial bundled-English milestone, the uncompressed path is simplest;
-revisit zstd when wiring on-demand downloads. (If you'd prefer the pipeline emit a
-different codec that Apple decodes natively, that's a small pipeline change —
-open an issue in SGCorpus.)
+**Why LZMA/.xz:** it decodes natively on Apple platforms (`Compression`'s
+`.lzma`, or `AppleArchive`) so the app needs **no third-party codec**, and it
+compresses this text-heavy data ~13% smaller than zstd. Verify the `sha256`
+against the *compressed* artifact from the manifest before decompressing.
 
 ### Delta updates (optional, later)
 The pipeline can emit row-level patches (`sgcorpus delta`) keyed on
