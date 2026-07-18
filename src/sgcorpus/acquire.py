@@ -50,18 +50,31 @@ def download(
     *,
     resume: bool = True,
     progress: bool = True,
+    offline: bool = False,
 ) -> Provenance:
     """Download ``url`` to ``dest`` (resumable) and return provenance.
 
-    A ``.done`` sidecar marks a fully-verified download so re-runs skip it.
-    """
-    os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
-    total, dump_date = _head(url)
+    A ``.done`` sidecar marks a fully-verified download. If it's present the
+    function returns the cached provenance and makes **no network call at all**
+    — so rebuilds off a cached dump never wait on the network. Delete the
+    ``.done`` sidecar (or the file) to force a re-download.
 
+    ``offline=True`` refuses to touch the network: it returns the cache if
+    present and raises otherwise.
+    """
     done_marker = dest + ".done"
     if os.path.exists(done_marker) and os.path.exists(dest):
         with open(done_marker) as f:
             return Provenance(**json.load(f))
+
+    if offline:
+        raise RuntimeError(
+            f"offline: no cached download at {dest}. "
+            f"Run once without --offline to populate the cache."
+        )
+
+    os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
+    total, dump_date = _head(url)
 
     existing = os.path.getsize(dest) if (resume and os.path.exists(dest)) else 0
     if total is not None and existing >= total:

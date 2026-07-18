@@ -35,7 +35,7 @@ def cmd_acquire(args) -> int:
     src = resolve_source(args.edition, args.lang, url=args.url, lang_name=args.lang_name)
     dest = args.output or os.path.join(args.download_dir, f"{args.edition}-{args.lang}.jsonl")
     print(f"Source: {src.url}")
-    prov = download(src.url, dest, resume=not args.no_resume)
+    prov = download(src.url, dest, resume=not args.no_resume, offline=args.offline)
     print(f"Downloaded {prov.bytes:,} B -> {dest}")
     print(f"  dump_date={prov.dump_date}  sha256={prov.sha256[:16]}…")
     return 0
@@ -64,8 +64,9 @@ def cmd_build(args) -> int:
         dump_date = args.dump_date or "unknown"
     else:
         input_path = os.path.join(args.download_dir, f"{args.edition}-{args.lang}.jsonl")
-        print(f"Source: {src.url}")
-        prov = download(src.url, input_path, resume=not args.no_resume)
+        cached = os.path.exists(input_path + ".done")
+        print(f"Source: {src.url}" + ("  [cached — no network]" if cached else ""))
+        prov = download(src.url, input_path, resume=not args.no_resume, offline=args.offline)
         dump_date = args.dump_date or prov.dump_date
 
     print(f"Building {src.lang_code} pack from {input_path} (dump {dump_date})…")
@@ -191,6 +192,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_source_args(ap)
     ap.add_argument("--output", help="destination path (default: <download-dir>/<edition>-<lang>.jsonl)")
     ap.add_argument("--no-resume", action="store_true")
+    ap.add_argument("--offline", action="store_true", help="use the cached download only; never touch the network")
     ap.set_defaults(func=cmd_acquire)
 
     bp = sub.add_parser("build", help="build a SQLite pack")
@@ -199,6 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
     bp.add_argument("--dump-date", help="override source dump date (YYYY-MM-DD)")
     bp.add_argument("--wiktextract-version", default="unknown")
     bp.add_argument("--no-resume", action="store_true")
+    bp.add_argument("--offline", action="store_true", help="rebuild from the cached download only; never touch the network")
     bp.add_argument("--no-compress", action="store_true", help="skip .zst emission")
     bp.add_argument("--no-examples", action="store_true", help="drop examples (size lever)")
     bp.add_argument("--keep-etymology", action="store_true")

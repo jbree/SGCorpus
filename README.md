@@ -6,7 +6,9 @@ per-language dictionary + thesaurus packs derived from Wiktionary (via
 power the reference inspector in the [Song Garden](../SongGarden) app.
 
 The full specification lives in [`docs/PLAN.md`](docs/PLAN.md); this README is
-the operational quick-start. The output SQLite schema in
+the operational quick-start. To wire a built pack into the Song Garden app, see
+[`docs/INTEGRATION.md`](docs/INTEGRATION.md) (written to be read by an LLM
+working in the app repo). The output SQLite schema in
 [`src/sgcorpus/schema.py`](src/sgcorpus/schema.py) **is** the contract the app
 depends on — keep it stable and bump `SCHEMA_VERSION` on any breaking change.
 
@@ -47,6 +49,24 @@ uv run sgcorpus apply-delta --base build/en-2026-05-01-schema1.sqlite \
 
 Source files are cached under `downloads/`, artifacts written to `build/`
 (both git-ignored — the multi-GB inputs are never committed).
+
+### Local workflow & offline rebuilds
+
+The first `build` (or `acquire`) downloads the source dump to
+`downloads/<edition>-<lang>.jsonl` and writes a `.done` provenance sidecar next
+to it. **Every subsequent `build` reuses that cache and makes no network call at
+all** — so you only wait on the ~3 GB download once, then iterate on build flags
+freely:
+
+```bash
+uv run sgcorpus build --lang en                 # first run: downloads, then builds
+uv run sgcorpus build --lang en --no-examples   # instant re-download skip; rebuilds from cache
+uv run sgcorpus build --lang en --offline       # hard-guarantee no network (errors if uncached)
+```
+
+To force a fresh download, delete the `.done` sidecar (or the `.jsonl`) in
+`downloads/`. `--offline` never touches the network: it builds from the cache or
+fails with a clear message.
 
 ### Build size levers (plan §8.4)
 
