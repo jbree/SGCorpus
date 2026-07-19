@@ -119,6 +119,13 @@ class BuildConfig:
     keep_examples: bool = True
     keep_etymology: bool = False          # plan §10.4: leaning drop for size
     drop_form_of: bool = True             # plan §3.2: skip pure inflection senses
+    # Proper-noun handling: names/proper nouns are ~18% of the raw corpus and
+    # the obscure long tail (surnames, minor places, disambiguation stubs) mostly
+    # degrades lookup/thesaurus results. Keep a name only when its headword's
+    # wordfreq Zipf frequency is >= this cutoff, so famous names stay (London
+    # 5.27, God 5.57, Dylan 4.05, Hogwarts 3.18) and the tail is dropped (McStay
+    # 1.70). ``None`` disables the filter entirely (keep every name).
+    name_min_zipf: float | None = 3.0
     # Multi-element glosses: "join" (broad→specific joined by "; ") or
     # "last" (most specific only). Plan §10.2 — pick one, apply consistently.
     gloss_hierarchy: str = "join"

@@ -16,9 +16,12 @@ import os
 import sqlite3
 from dataclasses import dataclass
 
+from typing import Callable
+
 from . import SCHEMA_VERSION
 from .config import BuildConfig, SourceSpec
-from .normalize import NormWord, iter_entries, normalize_entry
+from .normalize import NormWord, is_proper_noun_pos, iter_entries, normalize_entry
+from .sanitize import clean, fold
 from . import schema
 
 LICENSE = "CC BY-SA 4.0"
@@ -33,6 +36,7 @@ class BuildStats:
     lines_malformed: int = 0
     entries_skipped_lang: int = 0
     entries_skipped_nolang: int = 0
+    entries_skipped_name_rare: int = 0
     entries_skipped_empty: int = 0
     words: int = 0
     senses: int = 0
@@ -52,6 +56,32 @@ class BuildStats:
     @property
     def avg_senses(self) -> float:
         return round(self.senses / self.words, 3) if self.words else 0.0
+
+
+# A name scorer maps a folded headword to a corpus-frequency Zipf value; the
+# proper-noun filter keeps names scoring >= cfg.name_min_zipf. Injectable so
+# tests can score deterministically without depending on wordfreq's corpus.
+NameScorer = Callable[[str], float]
+
+
+def _default_name_scorer() -> NameScorer:
+    """A wordfreq-backed scorer. Multi-word names (``new york``) score by their
+    strongest token, so a famous name isn't penalized for being a phrase.
+
+    wordfreq is imported lazily: subcommands that never build (verify, manifest)
+    and builds with ``name_min_zipf=None`` never pay its import cost.
+    """
+    from wordfreq import zipf_frequency
+
+    def score(folded: str) -> float:
+        if not folded:
+            return 0.0
+        if " " in folded:
+            return max((zipf_frequency(tok, "en") for tok in folded.split() if tok),
+                       default=0.0)
+        return zipf_frequency(folded, "en")
+
+    return score
 
 
 def open_text(path: str) -> io.TextIOBase:
@@ -80,7 +110,7 @@ def _serialize_children(nw: NormWord) -> str:
 
 def _stage_entries(
     path: str, cfg: BuildConfig, target_lang: str, stats: BuildStats,
-    stage: sqlite3.Connection,
+    stage: sqlite3.Connection, name_scorer: NameScorer | None = None,
 ) -> None:
     """Stream the source line-by-line into a disk-backed staging table.
 
@@ -88,8 +118,10 @@ def _stage_entries(
     full English dump never lives in RAM. Language filtering is done here, the
     single authority: an entry is kept only when its ``lang_code`` is present and
     equals ``target_lang`` (a missing ``lang_code`` is an unknown language and is
-    dropped, never blindly emitted — plan §3.1). ``seq`` records file order so the
-    later ORDER BY has a deterministic tie-breaker.
+    dropped, never blindly emitted — plan §3.1). Proper-noun filtering also lives
+    here (same keep/drop-policy layer): a name is dropped when its headword's
+    corpus frequency is below ``cfg.name_min_zipf``. ``seq`` records file order so
+    the later ORDER BY has a deterministic tie-breaker.
     """
     stage.execute(
         "CREATE TABLE stage (seq INTEGER PRIMARY KEY, word_search TEXT, "
@@ -120,6 +152,15 @@ def _stage_entries(
                     continue
                 if lc != target_lang:
                     stats.entries_skipped_lang += 1
+                    continue
+            # Proper-noun frequency gate. Checked on the RAW pos (before
+            # normalization folds "proper noun" -> "name") so the filter is
+            # spelling-agnostic. Only names are scored, so the wordfreq lookup
+            # touches ~18% of entries; common words never pay for it.
+            if cfg.name_min_zipf is not None and is_proper_noun_pos(obj.get("pos")):
+                score = name_scorer(fold(clean(obj.get("word")))) if name_scorer else 0.0
+                if score < cfg.name_min_zipf:
+                    stats.entries_skipped_name_rare += 1
                     continue
             nw = normalize_entry(obj, cfg)
             if nw is None:
@@ -272,8 +313,13 @@ def build_pack(
     dump_date: str | None = None,
     wiktextract_version: str = "unknown",
     compress: bool = True,
+    name_scorer: NameScorer | None = None,
 ) -> BuildResult:
     cfg = cfg or BuildConfig()
+    # Build the wordfreq-backed scorer only when the proper-noun filter is on and
+    # the caller didn't inject one (tests do, to stay off the real corpus).
+    if name_scorer is None and cfg.name_min_zipf is not None:
+        name_scorer = _default_name_scorer()
     os.makedirs(out_dir, exist_ok=True)
     dump_date = dump_date or "unknown"
     pack_version = dump_date
@@ -294,7 +340,7 @@ def build_pack(
     try:
         stage.execute("PRAGMA journal_mode = OFF;")  # throwaway; rebuilt each run
         stage.execute("BEGIN")
-        _stage_entries(input_path, cfg, source.lang_code, stats, stage)
+        _stage_entries(input_path, cfg, source.lang_code, stats, stage, name_scorer)
         stage.execute("COMMIT")
 
         conn = schema.open_build_db(sqlite_path, cfg.page_size)
@@ -375,6 +421,7 @@ def build_pack(
             "lines_malformed": stats.lines_malformed,
             "entries_skipped_lang": stats.entries_skipped_lang,
             "entries_skipped_nolang": stats.entries_skipped_nolang,
+            "entries_skipped_name_rare": stats.entries_skipped_name_rare,
             "entries_skipped_empty": stats.entries_skipped_empty,
         },
         "artifact": os.path.basename(compressed_path or sqlite_path),

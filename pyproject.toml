@@ -6,9 +6,17 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Song Garden" }]
-# No runtime dependencies — the pipeline is pure Python stdlib (json, sqlite3,
-# lzma, urllib). LZMA/.xz packs decode natively on Apple platforms.
-dependencies = []
+# The pipeline core is stdlib (json, sqlite3, lzma, urllib). LZMA/.xz packs
+# decode natively on Apple platforms. The one dependency is wordfreq, a
+# build-time-only corpus-frequency lookup used to keep well-known proper nouns
+# (London, Dylan) and drop the obscure long tail (surnames like McStay). Its
+# frequency data is bundled and frozen per released version, so it is PINNED —
+# a version bump could shift a name across the threshold and change the pack's
+# content_digest. wordfreq never ships inside a pack; it only decides which
+# name rows get written.
+dependencies = [
+    "wordfreq==3.1.1",
+]
 
 [project.scripts]
 sgcorpus = "sgcorpus.cli:main"

@@ -6,4 +6,8 @@
 {"word": "kartoffel", "pos": "noun", "lang": "German", "senses": [{"glosses": ["Potato (entry with NO lang_code — unknown language, must be dropped)."]}]}
 {"word": "  ", "pos": "noun", "lang": "English", "lang_code": "en", "senses": [{"glosses": ["blank word, should be dropped"]}]}
 {"word": "empty", "pos": "adjective", "lang": "English", "lang_code": "en", "senses": [{"glosses": ["   "]}]}
+{"word": "London", "pos": "name", "lang": "English", "lang_code": "en", "senses": [{"glosses": ["The capital city of England and the United Kingdom."]}], "sounds": [{"ipa": "/ˈlʌndən/"}]}
+{"word": "McStay", "pos": "name", "lang": "English", "lang_code": "en", "senses": [{"glosses": ["A surname (obscure — must be filtered out by the frequency gate)."]}]}
+{"word": "iris", "pos": "noun", "lang": "English", "lang_code": "en", "senses": [{"glosses": ["A flowering plant with showy flowers."]}]}
+{"word": "Iris", "pos": "name", "lang": "English", "lang_code": "en", "senses": [{"glosses": ["A female given name (the proper-noun entry, dropped; the common noun above must survive)."]}]}
 this line is not valid json and must be counted as malformed

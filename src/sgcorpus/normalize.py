@@ -18,7 +18,7 @@ from .sanitize import clean, fold, search_fold
 # common variants to a small stable set. Unknown values pass through cleaned.
 POS_MAP = {
     "noun": "noun",
-    "proper noun": "noun",
+    "proper noun": "name",
     "verb": "verb",
     "adj": "adjective",
     "adjective": "adjective",
@@ -79,9 +79,21 @@ class NormWord:
     relations: list[NormRelation] = field(default_factory=list)
 
 
+# Raw Wiktextract pos strings that denote a proper noun / name. enwiktionary
+# emits "name"; the others are defensive for cross-edition / future data. Checked
+# against the RAW pos (before POS_MAP folds "proper noun" -> "name"), so the
+# proper-noun filter fires regardless of which spelling the source used.
+PROPER_NOUN_POS = frozenset({"name", "proper noun", "proper-noun", "propn"})
+
+
 def normalize_pos(pos: str | None) -> str:
     p = clean(pos or "").lower()
     return POS_MAP.get(p, p or "unknown")
+
+
+def is_proper_noun_pos(pos: str | None) -> bool:
+    """True if a raw Wiktextract ``pos`` marks the entry as a name/proper noun."""
+    return clean(pos or "").lower() in PROPER_NOUN_POS
 
 
 def _first_str(value) -> str | None:

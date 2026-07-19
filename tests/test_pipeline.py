@@ -13,16 +13,28 @@ from sgcorpus.sanitize import clean, fold, search_fold
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "sample.jsonl")
 
+# Deterministic stand-in for wordfreq so the suite doesn't depend on the real
+# corpus (fast, stable across wordfreq versions). London famous, McStay/Iris
+# obscure — matching the shape of real Zipf scores. Unknown words score 0.
+FAKE_ZIPF = {"london": 5.3, "mcstay": 1.7, "iris": 1.5}
+
+
+def _fake_scorer(folded: str) -> float:
+    if " " in folded:
+        return max((FAKE_ZIPF.get(t, 0.0) for t in folded.split()), default=0.0)
+    return FAKE_ZIPF.get(folded, 0.0)
+
 
 @pytest.fixture
 def en_source():
     return resolve_source("enwiktionary", "en")
 
 
-def _build(tmp_path, source, **cfg_kw):
+def _build(tmp_path, source, *, name_scorer=_fake_scorer, **cfg_kw):
     cfg = BuildConfig(**cfg_kw)
     return build_pack(
-        FIXTURE, str(tmp_path), source, cfg=cfg, dump_date="2026-07-16", compress=False
+        FIXTURE, str(tmp_path), source, cfg=cfg, dump_date="2026-07-16",
+        compress=False, name_scorer=name_scorer,
     )
 
 
@@ -65,6 +77,57 @@ def test_build_filters_language_and_drops_empty(tmp_path, en_source):
     assert "empty" not in words
     assert {"ocean", "run", "café"} <= words
     conn.close()
+
+
+# --- proper-noun / name frequency gate -------------------------------------
+
+def test_proper_noun_frequency_filter(tmp_path, en_source):
+    result = _build(tmp_path, en_source)  # default name_min_zipf=3.0
+    conn = sqlite3.connect(result.sqlite_path)
+    words = {w for (w,) in conn.execute("SELECT word FROM word")}
+    assert "London" in words          # fake zipf 5.3 >= 3.0 -> kept
+    assert "McStay" not in words      # fake zipf 1.7 < 3.0 -> dropped
+    conn.close()
+    assert result.stats.entries_skipped_name_rare == 2   # McStay + Iris
+
+
+def test_name_gate_disabled_keeps_all_names(tmp_path, en_source):
+    result = _build(tmp_path, en_source, name_min_zipf=None)
+    conn = sqlite3.connect(result.sqlite_path)
+    words = {w for (w,) in conn.execute("SELECT word FROM word")}
+    assert {"London", "McStay", "Iris"} <= words
+    conn.close()
+    assert result.stats.entries_skipped_name_rare == 0
+
+
+def test_dropped_name_keeps_shared_common_word(tmp_path, en_source):
+    """Dropping the proper-noun 'Iris' must not remove the common noun 'iris'."""
+    result = _build(tmp_path, en_source)
+    conn = sqlite3.connect(result.sqlite_path)
+    rows = conn.execute(
+        "SELECT word, pos FROM word WHERE word_folded='iris'"
+    ).fetchall()
+    conn.close()
+    assert rows == [("iris", "noun")]
+
+
+def test_proper_noun_pos_normalizes_to_name():
+    from sgcorpus.normalize import is_proper_noun_pos, normalize_pos
+    # POS_MAP fix: raw "proper noun" is labeled a name, not folded into "noun".
+    assert normalize_pos("proper noun") == "name"
+    assert is_proper_noun_pos("proper noun")
+    assert is_proper_noun_pos("Name")           # case-insensitive
+    assert not is_proper_noun_pos("noun")
+
+
+def test_default_name_scorer_discriminates_fame():
+    """The real wordfreq-backed scorer separates famous names from obscure ones."""
+    from sgcorpus.build import _default_name_scorer
+    score = _default_name_scorer()
+    assert score("london") >= 3.0
+    assert score("mcstay") < 3.0
+    assert score("new york") >= 3.0   # multiword scored by strongest token
+    assert score("") == 0.0
 
 
 def test_build_multipos_run_has_two_entries(tmp_path, en_source):
@@ -194,7 +257,8 @@ def test_manifest_lists_latest_pack(tmp_path, en_source):
 def test_delta_roundtrip(tmp_path, en_source):
     """old→new patch applied to old must reproduce new's content digest (plan §9)."""
     old = build_pack(FIXTURE, str(tmp_path / "old"), en_source,
-                     cfg=BuildConfig(), dump_date="2026-05-01", compress=False)
+                     cfg=BuildConfig(), dump_date="2026-05-01", compress=False,
+                     name_scorer=_fake_scorer)
 
     # Build a "new" dump: café gains a synonym; a brand-new word appears.
     new_lines = []
@@ -213,7 +277,8 @@ def test_delta_roundtrip(tmp_path, en_source):
     new_fixture.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
     new = build_pack(str(new_fixture), str(tmp_path / "new"), en_source,
-                     cfg=BuildConfig(), dump_date="2026-07-16", compress=False)
+                     cfg=BuildConfig(), dump_date="2026-07-16", compress=False,
+                     name_scorer=_fake_scorer)
     assert new.stats.words == old.stats.words + 1
 
     sidecar = create_delta(old.sqlite_path, new.sqlite_path, str(tmp_path / "patches"),
@@ -227,9 +292,11 @@ def test_delta_roundtrip(tmp_path, en_source):
 
 
 def test_apply_delta_digest_mismatch_raises(tmp_path, en_source):
-    old = build_pack(FIXTURE, str(tmp_path / "o"), en_source, dump_date="2026-05-01", compress=False)
+    old = build_pack(FIXTURE, str(tmp_path / "o"), en_source, dump_date="2026-05-01",
+                     compress=False, name_scorer=_fake_scorer)
     # Same source → empty diff → applying reproduces old's own digest.
-    new = build_pack(FIXTURE, str(tmp_path / "n"), en_source, dump_date="2026-07-16", compress=False)
+    new = build_pack(FIXTURE, str(tmp_path / "n"), en_source, dump_date="2026-07-16",
+                     compress=False, name_scorer=_fake_scorer)
     sidecar = create_delta(old.sqlite_path, new.sqlite_path, str(tmp_path / "p"), compress=False)
     assert sidecar["upserts"] == 0 and sidecar["deletes"] == 0
     patch = os.path.join(str(tmp_path / "p"), sidecar["artifact"])
