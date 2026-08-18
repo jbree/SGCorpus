@@ -94,7 +94,7 @@ These are the fields we rely on and the quirks we normalize around. **Treat them
 **Assumptions & quirks:**
 
 - **`glosses` is a list.** When it has >1 element it's a hierarchy (broad → specific); join with "; " or keep the **last** (most specific) — decide once, apply consistently. Empty/whitespace glosses exist → skip the sense.
-- **Drop pure form-of/alt-of senses** (`form_of`/`alt_of` present and gloss is just "plural of…/alternative of…"). They bloat the DB and add no dictionary value here (inflection isn't this pipeline's job). Keep a config flag to retain them if a later feature needs redirects.
+- **Drop the pure form-of/alt-of *sense*** (`form_of`/`alt_of` present, gloss just "plural of…/alternative of…") — the app shows the lemma's definition instead of the stub. But **capture the link** as a `form_of` relation (target = lemma, `sense_hint` = the descriptor) and **keep** an inflection-only headword so a plural like "mountains" resolves to "mountain". `drop_form_of` still governs the sense; `form_of` ∈ `relation_types` governs the relation.
 - **`examples[].text`** is the display string. In non-English editions an `english` translation may accompany it; keep `text` (native) and optionally `english`. `ref` is a citation — keep optionally, low priority.
 - **`tags`** are valuable for songwriters (flagging *slang/informal/archaic*). Persist them; they're a JSON array of short strings.
 - **Sense-level `synonyms`/`antonyms`** can appear here in addition to entry level; merge both (§3.4).
@@ -205,7 +205,7 @@ CREATE INDEX idx_pron_word ON pronunciation(word_id);
 CREATE TABLE relation (
   id         INTEGER PRIMARY KEY,
   word_id    INTEGER NOT NULL REFERENCES word(id),
-  rel_type   TEXT NOT NULL,               -- 'synonym' | 'antonym' | 'hypernym' | 'hyponym' | 'related' | 'derived'
+  rel_type   TEXT NOT NULL,               -- 'synonym' | 'antonym' | 'hypernym' | 'related' | 'derived' | 'form_of'
   target     TEXT NOT NULL,               -- surface string; resolved lazily by lookup, NOT a FK
   target_folded TEXT NOT NULL,            -- for tap-through lookup
   sense_hint TEXT,                         -- optional gloss hint
@@ -337,8 +337,8 @@ The app must render when data is partial, because it will be: **IPA often absent
 | Definition | `senses[].glosses` (fallback `raw_glosses`) | list; join or take last |
 | Example | `senses[].examples[].text` (+ `.english`) | optional |
 | Usage register | `senses[].tags` | slang/informal/archaic etc. |
-| Drop inflections | `senses[].form_of` / `alt_of` | skip pure form-of senses |
+| Inflections | `senses[].form_of` / `alt_of` | drop the stub sense; keep the lemma link as a `form_of` relation |
 | IPA | `sounds[].ipa` (+ `.tags`) | often absent; keep all, dialect-tagged |
 | Rhyme key (future) | `sounds[].rhymes`, `sounds[].enpr` | keep if present |
-| Thesaurus | `synonyms[].word`, `antonyms[].word`, `related[]`, `hypernyms[]`, `hyponyms[]`, `derived[]` | + sense/sense-level; targets are strings, resolve lazily |
+| Thesaurus | `synonyms[].word`, `antonyms[].word`, `related[]`, `hypernyms[]`, `derived[]` | + sense-level; targets are strings, resolve lazily; `hyponyms[]` deliberately not shipped |
 | Ignore | `translations`, `forms`, `head_templates`, `categories`, `audio bytes` | — |

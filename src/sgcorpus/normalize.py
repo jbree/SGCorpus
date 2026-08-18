@@ -213,6 +213,46 @@ def _normalize_relations(entry: dict, cfg: BuildConfig) -> list[NormRelation]:
     for sense in entry.get("senses", []) or []:
         if isinstance(sense, dict):
             add_from(sense)
+
+    # Inflection / alternative-form links: "mountains" → "mountain", "ran" →
+    # "run". Wiktextract records these on a sense as form_of/alt_of (a list of
+    # {"word": lemma}) alongside a "plural of mountain"-style gloss. We keep the
+    # link even though the stub sense itself is dropped, so the app can offer the
+    # lemma as a see-also and borrow its definition. The gloss rides along as
+    # sense_hint so the app can label the relationship ("plural of mountain").
+    if "form_of" in cfg.relation_types:
+        self_fold = fold(clean(entry.get("word", "")))
+        bucket = seen.setdefault("form_of", set())
+        for sense in entry.get("senses", []) or []:
+            if not isinstance(sense, dict):
+                continue
+            links = sense.get("form_of") or sense.get("alt_of")
+            if not links:
+                continue
+            glosses = sense.get("glosses") or sense.get("raw_glosses") or []
+            hint = next((clean(g) for g in glosses if isinstance(g, str) and clean(g)), None)
+            tags = [clean(t) for t in (sense.get("tags") or []) if isinstance(t, str)]
+            tags = [t for t in tags if t]
+            for item in links:
+                target = clean(item.get("word")) if isinstance(item, dict) else clean(item)
+                if not target:
+                    continue
+                tfold = fold(target)
+                if not tfold or tfold in bucket or tfold == self_fold:
+                    continue
+                if counts.get("form_of", 0) >= cfg.max_relations_per_type:
+                    continue
+                bucket.add(tfold)
+                counts["form_of"] = counts.get("form_of", 0) + 1
+                out.append(
+                    NormRelation(
+                        rel_type="form_of",
+                        target=target,
+                        target_folded=tfold,
+                        sense_hint=hint,
+                        tags=tags,
+                    )
+                )
     return out
 
 
@@ -221,9 +261,11 @@ def normalize_entry(entry: dict, cfg: BuildConfig) -> NormWord | None:
 
     Language filtering is **not** done here — it is the caller's single
     responsibility (see :func:`sgcorpus.build._stage_entries`), so this function
-    has one job: extract and clean. Dropped when there is no surface word or zero
-    senses after filtering (the graceful-degradation contract, plan §8.5,
-    guarantees every stored headword has word + ≥1 gloss).
+    has one job: extract and clean. Dropped when there is no surface word, or
+    when it has neither a real sense nor a `form_of` link: a bare inflected form
+    ("mountains", whose only sense is the dropped "plural of mountain" stub) is
+    kept as a redirect to its lemma; every other stored headword still has word +
+    ≥1 gloss (the graceful-degradation contract, plan §8.5).
     """
     if not isinstance(entry, dict):
         return None
@@ -233,7 +275,8 @@ def normalize_entry(entry: dict, cfg: BuildConfig) -> NormWord | None:
         return None
 
     senses = _normalize_senses(entry, cfg)
-    if not senses:
+    relations = _normalize_relations(entry, cfg)
+    if not senses and not any(r.rel_type == "form_of" for r in relations):
         return None
 
     nw = NormWord(
@@ -243,7 +286,7 @@ def normalize_entry(entry: dict, cfg: BuildConfig) -> NormWord | None:
         pos=normalize_pos(entry.get("pos")),
         senses=senses,
         pronunciations=_normalize_pronunciations(entry),
-        relations=_normalize_relations(entry, cfg),
+        relations=relations,
     )
     return nw
 

@@ -154,6 +154,45 @@ def test_form_of_sense_dropped(tmp_path, en_source):
     conn.close()
 
 
+def test_hyponyms_not_extracted(tmp_path, en_source):
+    """The ocean entry carries a hyponym ('pacific'); it must not reach the pack."""
+    result = _build(tmp_path, en_source)
+    conn = sqlite3.connect(result.sqlite_path)
+    hyponyms = conn.execute(
+        "SELECT COUNT(*) FROM relation WHERE rel_type='hyponym'"
+    ).fetchone()[0]
+    assert hyponyms == 0
+    # The other relation types on the same entry still land.
+    kinds = {rt for (rt,) in conn.execute(
+        "SELECT DISTINCT r.rel_type FROM relation r JOIN word w ON w.id=r.word_id "
+        "WHERE w.word_folded='ocean'"
+    )}
+    assert {"synonym", "antonym", "related"} <= kinds
+    assert "hyponym" not in kinds
+    conn.close()
+
+
+def test_plural_stub_kept_with_form_of_relation(tmp_path, en_source):
+    """A bare plural ('oceans') survives as a form_of redirect to its lemma."""
+    result = _build(tmp_path, en_source)
+    conn = sqlite3.connect(result.sqlite_path)
+    # The headword exists even though its only sense (the "plural of ocean" stub)
+    # was dropped — it has zero senses…
+    wid = conn.execute("SELECT id FROM word WHERE word_folded='oceans'").fetchone()
+    assert wid is not None
+    sense_count = conn.execute(
+        "SELECT COUNT(*) FROM sense WHERE word_id=?", (wid[0],)
+    ).fetchone()[0]
+    assert sense_count == 0
+    # …but carries a form_of relation to the lemma, with the stub gloss as hint.
+    rel = conn.execute(
+        "SELECT rel_type, target, target_folded, sense_hint FROM relation WHERE word_id=?",
+        (wid[0],),
+    ).fetchall()
+    assert rel == [("form_of", "ocean", "ocean", "plural of ocean")]
+    conn.close()
+
+
 def test_gloss_hierarchy_join(tmp_path, en_source):
     result = _build(tmp_path, en_source, gloss_hierarchy="join")
     conn = sqlite3.connect(result.sqlite_path)

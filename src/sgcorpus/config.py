@@ -91,22 +91,27 @@ def resolve_source(
 # --- Build knobs -----------------------------------------------------------
 
 # Relation types we recognize; the app treats synonym/antonym as core thesaurus
-# and the rest as optional "related" chips.
+# and related/hypernym as optional "related" chips. `derived` is carried but the
+# app groups it nowhere; `form_of` links an inflected form to its lemma (plural →
+# singular) and is not sourced from a linkage array — see `_normalize_relations`.
+# `hyponym` is deliberately absent: the narrower-term list is mostly noise (every
+# species under "bird") and the app shows it nowhere, so it is not even extracted.
 ALL_RELATION_TYPES = (
     "synonym",
     "antonym",
     "hypernym",
-    "hyponym",
     "related",
     "derived",
+    "form_of",
 )
 
-# Wiktextract stores linkage under plural array keys; map to our rel_type.
+# Wiktextract stores linkage under plural array keys; map to our rel_type. Note
+# `form_of` has no entry here — it lives on senses (form_of/alt_of), not in a
+# top-level linkage array, and is captured separately.
 RELATION_SOURCE_KEYS = {
     "synonyms": "synonym",
     "antonyms": "antonym",
     "hypernyms": "hypernym",
-    "hyponyms": "hyponym",
     "related": "related",
     "derived": "derived",
 }
@@ -118,7 +123,10 @@ class BuildConfig:
 
     keep_examples: bool = True
     keep_etymology: bool = False          # plan §10.4: leaning drop for size
-    drop_form_of: bool = True             # plan §3.2: skip pure inflection senses
+    # Skip the "plural of X" stub *sense* (the app shows the lemma's definition
+    # instead). The plural→singular link itself is still captured as a `form_of`
+    # relation, and such an inflection-only headword is kept, not dropped.
+    drop_form_of: bool = True
     # Proper-noun handling: names/proper nouns are ~18% of the raw corpus and
     # the obscure long tail (surnames, minor places, disambiguation stubs) mostly
     # degrades lookup/thesaurus results. Keep a name only when its headword's

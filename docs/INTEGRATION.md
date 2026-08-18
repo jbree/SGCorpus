@@ -77,10 +77,10 @@ CREATE INDEX idx_pron_word ON pronunciation(word_id);
 CREATE TABLE relation (
   id            INTEGER PRIMARY KEY,
   word_id       INTEGER NOT NULL,  -- -> word.id
-  rel_type      TEXT NOT NULL,     -- 'synonym'|'antonym'|'hypernym'|'hyponym'|'related'|'derived'
-  target        TEXT NOT NULL,     -- surface string — DISPLAY THIS on the chip
+  rel_type      TEXT NOT NULL,     -- 'synonym'|'antonym'|'hypernym'|'related'|'derived'|'form_of'
+  target        TEXT NOT NULL,     -- surface string — DISPLAY THIS on the chip (form_of: the lemma)
   target_folded TEXT NOT NULL,     -- lookup key for tap-through (NOT a foreign key)
-  sense_hint    TEXT,              -- optional gloss hint tying the relation to a sense
+  sense_hint    TEXT,              -- optional gloss hint; for form_of, the "plural of X"-style descriptor
   tags          TEXT               -- JSON array; may be NULL
 );
 CREATE INDEX idx_rel_word ON relation(word_id, rel_type);
@@ -254,8 +254,13 @@ func decodeJSONArray(_ value: String?) -> [String] {
   show `pronunciations` (prefer a dialect via `dialects`, e.g. US → General-American
   → first). Example lines under each sense when present.
 - **Thesaurus panel**: from the same `WordEntry.relations`, render synonym/antonym
-  chips (and optionally hypernym/hyponym/related). Each chip's label is `target`;
+  chips (and optionally hypernym/related). Each chip's label is `target`;
   tapping it calls `lookup(targetFolded)` — the existing tap-through behavior.
+- **Inflections (`form_of`)**: a plural or conjugated headword ("mountains") carries
+  a `form_of` relation whose `target` is the lemma ("mountain") and whose
+  `sense_hint` is a descriptor ("plural of mountain"). Offer the lemma as a
+  tap-through; when the inflected form has no sense of its own (a pure stub), show
+  the lemma's definition in its place.
 
 ---
 
